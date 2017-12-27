@@ -48,8 +48,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
 import java.net.URL;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import com.googlecode.jmxtrans.model.output.elastic.util.IndexNameBuilder;
 
 import static com.googlecode.jmxtrans.util.NumberUtils.isNumeric;
 
@@ -66,6 +68,7 @@ public class ElasticWriter extends BaseOutputWriter {
 
 	private static final String DEFAULT_ROOT_PREFIX = "jmxtrans";
 	private static final String ELASTIC_TYPE_NAME = "jmx-entry";
+	private static final String ELASTICSEARCH_INDEX_DEFAULT_VALUE = "-%{yyyy.MM.dd}";
 
 	private static final Object CREATE_MAPPING_LOCK = new Object();
 
@@ -74,7 +77,9 @@ public class ElasticWriter extends BaseOutputWriter {
 
 	private final String rootPrefix;
 	private final String connectionUrl;
-	private final String indexName;
+	private final String elasticSeachIndex;
+	private final String previousIndexName = null;
+	private IndexNameBuilder indexNameBuilder;
 
 	@JsonCreator
 	public ElasticWriter(
@@ -83,7 +88,8 @@ public class ElasticWriter extends BaseOutputWriter {
 			@JsonProperty("rootPrefix") String rootPrefix,
 			@JsonProperty("debug") Boolean debugEnabled,
 			@JsonProperty("connectionUrl") String connectionUrl,
-			@JsonProperty("settings") Map<String, Object> settings) throws IOException {
+			@JsonProperty("settings") Map<String, Object> settings,
+			@JsonProperty("elasticsearchIndex") String indexNamePattern) throws IOException {
 
 		super(typeNames, booleanAsNumber, debugEnabled, settings);
 
@@ -93,8 +99,28 @@ public class ElasticWriter extends BaseOutputWriter {
 						DEFAULT_ROOT_PREFIX);
 
 		this.connectionUrl = connectionUrl;
-		this.indexName = this.rootPrefix + "_jmx-entries";
+		this.elasticSeachIndex = firstNonNull(
+				indexNamePattern,
+				(String) getSettings().get("indexNamePattern"),
+				ELASTICSEARCH_INDEX_DEFAULT_VALUE
+		);
+		this.indexNameBuilder = new IndexNameBuilder(this.rootPrefix + this.elasticSeachIndex);
 		this.jestClient = createJestClient(connectionUrl);
+	}
+
+	private String getIndexName() throws LifecycleException {
+		Date timestamp = new Date();
+		String newIndexName = indexNameBuilder.build(timestamp);
+
+		if (newIndexName.equalsIgnoreCase(this.previousIndexName)) {
+			try {
+			createMappingIfNeeded(jestClient, newIndexName, ELASTIC_TYPE_NAME);
+			} catch (Exception e) {
+				throw new LifecycleException("Failed to create elastic mapping.", e);
+			}
+		}
+
+		return newIndexName;
 	}
 
 	private JestClient createJestClient(String connectionUrl) {
@@ -109,7 +135,7 @@ public class ElasticWriter extends BaseOutputWriter {
 
 	@Override
 	protected void internalWrite(Server server, Query query, ImmutableList<Result> results) throws Exception {
-
+		String indexName = getIndexName();
 		for (Result result : results) {
 			log.debug("Query result: [{}]", result);
 			if (isNumeric(result.getValue())) {
@@ -168,7 +194,7 @@ public class ElasticWriter extends BaseOutputWriter {
 	public void start() throws LifecycleException {
 		super.start();
 		try {
-			createMappingIfNeeded(jestClient, indexName, ELASTIC_TYPE_NAME);
+			createMappingIfNeeded(jestClient, getIndexName(), ELASTIC_TYPE_NAME);
 		} catch (Exception e) {
 			throw new LifecycleException("Failed to create elastic mapping.", e);
 		}
@@ -187,6 +213,12 @@ public class ElasticWriter extends BaseOutputWriter {
 
 	@Override
 	public String toString() {
+		String indexName = null;
+		try {
+			indexName = getIndexName();
+		} catch (LifecycleException e) {
+			indexName = "ExceptionOnGetIndexName";
+		}
 		final StringBuilder sb = new StringBuilder("ElasticWriter{");
 		sb.append("rootPrefix='").append(rootPrefix).append('\'');
 		sb.append(", connectionUrl='").append(connectionUrl).append('\'');

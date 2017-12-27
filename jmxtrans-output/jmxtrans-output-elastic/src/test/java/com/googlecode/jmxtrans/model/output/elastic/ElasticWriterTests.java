@@ -212,7 +212,7 @@ public class ElasticWriterTests {
 		ElasticWriter writer;
 
 		try {
-			writer = new ElasticWriter(typenames, true, PREFIX, true, connectionUrl, settings);
+			writer = new ElasticWriter(typenames, true, PREFIX, true, connectionUrl, settings, null);
 		} catch (IOException e) {
 			throw new RuntimeException("Unexpected failure to creare elastic writer for test", e);
 		}
